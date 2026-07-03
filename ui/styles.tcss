@@ -1,0 +1,140 @@
+/* ── 全局 ── */
+Screen {
+    layout: vertical;
+}
+
+/* ── 主内容区 ── */
+#main {
+    height: 1fr;
+    margin: 1 1 0 1;
+}
+
+/* ── 对话面板 ── */
+#chat-panel {
+    width: 65%;
+    border: solid $primary;
+    padding: 0;
+}
+
+#chat {
+    height: 1fr;
+    border: none;
+    background: transparent;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+    scrollbar-gutter: stable;
+    content-align: left top;
+}
+
+/* ── 日志面板 ── */
+#log-panel {
+    width: 35%;
+    border: solid $secondary;
+    padding: 0;
+    layout: vertical;
+}
+
+#task-list {
+    height: auto;
+    max-height: 50%;
+    border-bottom: solid $secondary;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+}
+
+#task-log {
+    height: 1fr;
+    border: none;
+    background: transparent;
+    padding: 0;
+    scrollbar-size: 1 1;
+    scrollbar-gutter: stable;
+    content-align: left top;
+}
+
+/* ── 底部输入区 ── */
+#input-area {
+    height: auto;
+    dock: bottom;
+}
+
+/* ── 命令补全框 ── */
+#completions {
+    display: none;
+    height: auto;
+    max-height: 10;
+    width: 100%;
+    background: $surface;
+    border-top: solid $primary;
+    border-left: solid $primary;
+    border-right: solid $primary;
+    padding: 0;
+}
+
+#completion-list {
+    height: auto;
+    max-height: 10;
+    width: 100%;
+    border: none;
+    background: transparent;
+}
+
+#completion-list > ListItem {
+    padding: 0 2;
+}
+
+#completion-list > ListItem.--highlight {
+    background: $primary;
+    color: $text;
+}
+
+/* ── 输入框 ── */
+#input-container {
+    height: auto;
+    border-top: solid $primary;
+    padding: 0 1;
+}
+
+#input-label {
+    width: 2;
+    color: $primary;
+    padding: 0;
+    content-align: center middle;
+}
+
+#input {
+    width: 1fr;
+    margin: 0;
+    border: solid $primary;
+}
+
+#input:focus {
+    border: solid $accent;
+}
+
+/* ── 状态栏 ── */
+#status-bar {
+    height: 1;
+    color: $text;
+    padding: 0 2;
+}
+
+#status-left {
+    width: 1fr;
+    content-align: left middle;
+}
+
+#status-center {
+    width: 1fr;
+    content-align: center middle;
+}
+
+#status-right {
+    width: 1fr;
+    content-align: right middle;
+}
+
+/* ── 滚动条 ── */
+RichLog:focus {
+    border: none;
+}
