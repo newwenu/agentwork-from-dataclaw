@@ -15,9 +15,9 @@ description: 对 Summer.csv 温室环境监测数据进行多维度数据挖掘�
 ## 执行模式
 
 ### 模式A：一键自动分析（推荐）
-直接调用 `summer_run_full_analysis` 工具，一键完成全部分析：
+直接调用 `summer_analysis` 工具，action 设为 `full`，一键完成全部分析：
 ```
-summer_run_full_analysis({"csv_path": "Summer.csv", "output_dir": "output"})
+summer_analysis({"action": "full", "csv_path": "Summer.csv", "output_dir": "output"})
 ```
 工具会自动完成：数据加载 → 统计分析 → 异常检测 → 生成8张图表 → 输出报告。
 
@@ -29,16 +29,18 @@ summer_run_full_analysis({"csv_path": "Summer.csv", "output_dir": "output"})
 **核心原则**：专用工具提供标准化的快速分析，`python_repl` 提供自由度——两者结合，按需选择。
 
 #### 可用的专用工具（快速获取标准结果）
-| 工具 | 用途 | 适用场景 |
-|------|------|---------|
-| `summer_load_data` | 加载数据并返回概况 | 快速查看数据维度、时间范围、缺失值 |
-| `summer_get_statistics` | 描述性统计摘要 | 快速获取各组传感器均值/极值 |
-| `summer_detect_anomalies` | IQR异常检测 | 快速定位异常传感器和异常率 |
-| `summer_get_correlation` | 传感器相关性 | 快速查看强相关项 |
-| `summer_generate_chart` | 生成标准图表 | 快速出图，chart_type见下方清单 |
-| `summer_run_full_analysis` | 一键完整分析 | 快速生成全部结果 |
+使用 `summer_analysis` 工具，通过 `action` 参数指定操作：
 
-`summer_generate_chart` 的 chart_type: temp_hum / light / blackglobe / co2 / heatmap / co2_anomaly / daily / boxplot
+| action | 用途 | 适用场景 |
+|--------|------|---------|
+| `load` | 加载数据并返回概况 | 快速查看数据维度、时间范围、缺失值 |
+| `statistics` | 描述性统计摘要 | 快速获取各组传感器均值/极值 |
+| `anomaly` | IQR异常检测 | 快速定位异常传感器和异常率 |
+| `correlation` | 传感器相关性 | 快速查看强相关项 |
+| `chart` | 生成标准图表 | 快速出图，chart_type见下方清单 |
+| `full` | 一键完整分析 | 快速生成全部结果 |
+
+`chart` action 的 chart_type 参数: temp_hum / light / blackglobe / co2 / heatmap / co2_anomaly / daily / boxplot
 
 #### 使用 python_repl 自定义分析（工具无法满足时）
 当用户的需求超出专用工具的能力范围时，使用 `python_repl` 编写自定义代码，例如：

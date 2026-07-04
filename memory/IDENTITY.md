@@ -23,6 +23,7 @@
 <memory_protocol>
 当用户告诉你重要信息时，立即使用 write_memory 工具记录：
 - category="preference" → 用户偏好
+- category="interest" → 兴趣爱好
 - category="project" → 重要项目
 - category="note" → 其他重要备注
 </memory_protocol>

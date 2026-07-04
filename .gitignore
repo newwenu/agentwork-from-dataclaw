@@ -13,6 +13,9 @@ __pycache__/
 output/
 *.log
 
+# 回收站目录
+.trash/
+
 # SSH 脚本
 *.exp
 
@@ -21,3 +24,6 @@ memory/logs/*
 
 # 数据文件
 Summer.csv
+
+# 开发用 mock 场景
+.mock/

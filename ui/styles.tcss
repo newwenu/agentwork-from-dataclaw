@@ -7,11 +7,13 @@ Screen {
 #main {
     height: 1fr;
     margin: 1 1 0 1;
+    overflow-x: hidden;
 }
 
 /* ── 对话面板 ── */
 #chat-panel {
-    width: 65%;
+    width: 1fr;
+    min-width: 0;
     border: solid $primary;
     padding: 0;
 }
@@ -23,12 +25,192 @@ Screen {
     padding: 0 1;
     scrollbar-size: 1 1;
     scrollbar-gutter: stable;
-    content-align: left top;
 }
 
-/* ── 日志面板 ── */
+/* ── 对话消息 ──
+   结构：ChatMessage(Grid) > .message-avatar + .message-bubble(Vertical)
+   头像固定 2 列宽，气泡宽度 1fr，所有层级 overflow:hidden，
+   避免 emoji 等宽字符在宽度计算时撑开布局。
+*/
+ChatMessage {
+    layout: grid;
+    grid-size: 2 1;
+    grid-columns: 2 1fr;
+    grid-rows: auto;
+    width: 100%;
+    height: auto;
+    margin: 0;
+    overflow: hidden hidden;
+}
+
+ChatMessage > .message-avatar {
+    width: 100%;
+    height: 100%;
+    content-align: center top;
+}
+
+ChatMessage > .message-bubble {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    overflow: hidden hidden;
+}
+
+ChatMessage > .message-bubble > .message-header {
+    width: 100%;
+    height: 1;
+}
+
+ChatMessage > .message-bubble > .message-header > .message-sender {
+    width: auto;
+    color: $text;
+}
+
+ChatMessage > .message-bubble > .message-body {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    overflow: hidden hidden;
+}
+
+.user-message > .message-bubble > .message-header > .message-sender {
+    color: $accent;
+}
+
+.ai-message > .message-bubble > .message-header > .message-sender {
+    color: $success;
+}
+
+.tool-message > .message-bubble > .message-header > .message-sender {
+    color: $warning;
+}
+
+.system-message > .message-bubble > .message-header > .message-sender {
+    color: $text-muted;
+}
+
+/* ── 思维链（AIMessage 内） ──
+   使用与 Widget 层级匹配的选择器，确保特异性足够覆盖默认样式。
+*/
+AIMessage > .message-bubble > .reasoning-section {
+    width: 100%;
+    height: auto;
+    background: $surface-darken-1;
+    border-top: none;
+    padding: 0;
+    margin: 0;
+}
+
+AIMessage > .message-bubble > .reasoning-section > CollapsibleTitle {
+    color: $warning;
+    text-style: italic;
+    height: 1;
+}
+
+AIMessage > .message-bubble > .reasoning-section > Contents {
+    padding: 0;
+}
+
+AIMessage > .message-bubble > .reasoning-section > Contents > .reasoning-body {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* ── 工具参数（ToolMessage 内） ──
+   轻量自定义：可点击预览行 + 可切换完整内容，无 Collapsible 包裹。
+*/
+ToolMessage > .message-bubble > .tool-args-preview {
+    width: 100%;
+    height: auto;
+    color: $text;
+    padding: 0;
+}
+
+ToolMessage > .message-bubble > .tool-args-preview:hover {
+    color: $warning;
+    background: $surface-darken-1;
+}
+
+ToolMessage > .message-bubble > .tool-args-body {
+    width: 100%;
+    height: auto;
+    color: $text;
+    padding: 0;
+}
+
+/* ── 工具结果（ToolMessage 内） ──
+   紧凑布局：结果紧跟工具调用，减少间距。
+*/
+ToolMessage > .message-bubble > .tool-result-section {
+    width: 100%;
+    height: auto;
+    margin: 0;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > CollapsibleTitle {
+    color: $warning;
+    padding: 0;
+    height: 1;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > Contents > .tool-result-container {
+    width: 100%;
+    height: auto;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > Contents > .tool-result-container > .tool-result-scroll {
+    width: 100%;
+    height: auto;
+    max-height: 20;
+    border: none;
+    padding: 0;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > Contents > .tool-result-container > .tool-result-scroll:focus {
+    border: none;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > Contents > .tool-result-container > .tool-result-scroll > .tool-result-body {
+    width: 100%;
+    height: auto;
+    color: $text-muted;
+    padding: 0;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > Contents > .tool-result-container > .tool-result-collapse {
+    width: auto;
+    height: 1;
+    color: $warning;
+    text-style: underline;
+    padding: 0;
+    margin: 0;
+}
+
+ToolMessage > .message-bubble > .tool-result-section > Contents > .tool-result-container > .tool-result-collapse:hover {
+    background: $surface-lighten-1;
+}
+
+/* ── ChatView 对话区容器 ── */
+ChatView {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+    scrollbar-gutter: stable;
+}
+
+/* ── 日志面板 ──
+   默认显示，固定宽度停靠右侧。终端过窄时由 JS 自动隐藏。
+*/
 #log-panel {
     width: 35%;
+    min-width: 0;
+    dock: right;
     border: solid $secondary;
     padding: 0;
     layout: vertical;

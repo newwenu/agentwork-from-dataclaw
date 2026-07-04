@@ -20,6 +20,7 @@ def resolve_under(root: Path | str, file_path: str, *, must_exist: bool = False)
         6. The final resolved path must still be under ``root``.
         7. Reject symbolic links (both the final path and any parent).
         8. If ``must_exist`` is True, the path must exist.
+        9. Reject paths under ``root/.trash/`` (protected directory).
 
     Args:
         root: Allowed root directory.
@@ -64,6 +65,15 @@ def resolve_under(root: Path | str, file_path: str, *, must_exist: bool = False)
         part.is_symlink() for part in target.parents if part != root
     ):
         raise ValueError("Symlinks are not allowed")
+
+    # Reject paths under .trash/ (protected directory, only delete_file tool can write into it)
+    trash_dir = root / ".trash"
+    try:
+        target.relative_to(trash_dir)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Access to .trash/ directory is not allowed")
 
     if must_exist and not target.exists():
         raise ValueError(f"File not found: {file_path}")

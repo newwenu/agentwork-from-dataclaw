@@ -14,8 +14,10 @@ from textual.widgets import Input, ListView, RichLog, Static
 from textual.worker import Worker, WorkerState
 
 from ui.capture import BackgroundCapture
+from ui.chat import ChatView
 from ui.commands import COMMANDS, CommandHandler
 from ui.completer import CommandCompleter
+from core.config import get_config
 
 if TYPE_CHECKING:
     from Claw import CoreClawAgent
@@ -35,16 +37,26 @@ class DataClawApp(App):
         self._completer = CommandCompleter(self, COMMANDS)
         self._history: list[str] = []
         self._history_index: int = -1
-        self._ignore_completion_count: int = 0  # 忽略来自历史导航的输入变更事件
-        self._last_prefix: str = ""  # 上一条日志的前缀，用于缩写
+        self._suppress_completion: bool = False
+        self._last_prefix: str = ""
+        self._log_user_pref: bool | None = None
+        self._raw_log_lines: list[str] = []
+        self._raw_log_max = 500
+        self._rewrite_timer = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="main"):
             with Vertical(id="chat-panel"):
-                yield RichLog(id="chat", highlight=True, markup=True, max_lines=1000, wrap=True)
+                model = getattr(self.agent.llm, 'model_name', None) or getattr(self.agent.llm, 'model', 'Unknown')
+                welcome = (
+                    f"[bold green]🐾 DataClaw 已启动[/]\n"
+                    f"[dim]模型:[/] [cyan]{model}[/]  [dim]工具:[/] [cyan]{len(self.agent.tools)}[/] 个\n"
+                    f"[dim]输入 /help 查看命令，/log 切换日志面板，输入 / 触发自动补全[/]"
+                )
+                yield ChatView(id="chat", welcome=welcome)
             with Vertical(id="log-panel"):
-                yield RichLog(id="task-list", markup=True, max_lines=100, wrap=True)
-                yield RichLog(id="task-log", highlight=True, markup=True, max_lines=500, wrap=True)
+                yield RichLog(id="task-list", markup=True, max_lines=100, wrap=True, min_width=1)
+                yield RichLog(id="task-log", highlight=True, markup=True, max_lines=500, wrap=True, min_width=1)
         with Vertical(id="input-area"):
             with Vertical(id="completions"):
                 completion_list = ListView(id="completion-list")
@@ -70,30 +82,77 @@ class DataClawApp(App):
         self.query_one("#input", Input).focus()
         self._update_status()
         self._update_task_list()
+        self._apply_log_visibility()
+        if not self.query_one("#log-panel").display and self._log_user_pref is None:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_system("[dim]⚠️ 终端较窄，日志面板已自动隐藏。输入 /log 可手动开启[/]")
         self.set_interval(1, self._refresh_task_log)
         self.set_interval(1, self._update_status)
         self.set_interval(5, self._update_task_list)
 
-        model = getattr(self.agent.llm, 'model_name', None) or getattr(self.agent.llm, 'model', 'Unknown')
-        self.query_one("#chat", RichLog).write(
-            f"[bold green]🐾 DataClaw 已启动[/]\n"
-            f"[dim]模型:[/] [cyan]{model}[/]  [dim]工具:[/] [cyan]{len(self.agent.tools)}[/] 个\n"
-            f"[dim]输入 /help 查看命令，输入 / 触发自动补全[/]\n"
-        )
+    def _apply_log_visibility(self) -> bool:
+        """根据终端宽度和用户偏好决定日志面板显隐。
+
+        返回面板是否刚刚变为可见（用于触发重写）。
+
+        逻辑：
+        - 用户手动 /log 切换后，记住偏好（True=开/False=关），始终尊重
+        - 自动模式下（_log_user_pref is None）：
+          - 终端宽度 < tui_log_min_width 时自动隐藏
+          - 终端宽度 >= tui_log_min_width 时自动显示
+        """
+        try:
+            term_width = self.console.size.width
+        except Exception:
+            term_width = 120
+        log_panel = self.query_one("#log-panel")
+        min_width = get_config().tui_log_min_width
+        was_visible = log_panel.display
+
+        if self._log_user_pref is not None:
+            log_panel.display = self._log_user_pref
+        elif term_width < min_width:
+            log_panel.display = False
+        else:
+            log_panel.display = True
+
+        return log_panel.display and not was_visible
+
+    def _rewrite_all_logs(self) -> None:
+        """清空 RichLog 并从 _raw_log_lines 重写所有日志行（用于宽度变化时重排）。"""
+        log = self.query_one("#task-log", RichLog)
+        log.clear()
+        for display_line in self._raw_log_lines:
+            log.write(f"[dim]{display_line}[/]")
+
+    def _schedule_rewrite(self) -> None:
+        """防抖式安排日志重写：取消上一次定时器后再安排新的。"""
+        if self._rewrite_timer is not None:
+            self._rewrite_timer.stop()
+        self._rewrite_timer = self.set_timer(0.05, self._rewrite_all_logs)
+
+    def on_resize(self, event) -> None:
+        just_visible = self._apply_log_visibility()
+        if just_visible or self.query_one("#log-panel").display:
+            self._schedule_rewrite()
 
     def _update_status(self) -> None:
         model = getattr(self.agent.llm, 'model_name', None) or getattr(self.agent.llm, 'model', 'Unknown')
         now = datetime.now().strftime("%H:%M:%S")
         self.query_one("#status-left", Static).update(f"🤖 {model}")
-        self.query_one("#status-center", Static).update("")
+        stats = self.agent.history.token_stats
+        if stats.total > 0:
+            self.query_one("#status-center", Static).update(f"📊 {stats.total:,} tokens (缓存 {stats.cached_tokens:,})")
+        else:
+            self.query_one("#status-center", Static).update("")
         self.query_one("#status-right", Static).update(f"⏰ {now}")
 
     def _refresh_task_log(self) -> None:
-        log = self.query_one("#task-log", RichLog)
         lines = self.capture.drain()
         if not lines:
             return
 
+        formatted: list[str] = []
         for line in lines:
             prefix = ""
             content = line
@@ -105,20 +164,16 @@ class DataClawApp(App):
             display_prefix = "↳" if prefix and prefix == self._last_prefix else prefix
             self._last_prefix = prefix
             display_line = f"{display_prefix} {content}" if display_prefix else content
+            formatted.append(display_line)
 
-            max_width = 32
-            if len(display_line) > max_width:
-                words = display_line.split(' ')
-                current_line = ""
-                for word in words:
-                    if len(current_line) + len(word) + 1 > max_width:
-                        log.write(f"[dim]{current_line}[/]")
-                        current_line = word
-                    else:
-                        current_line += " " + word if current_line else word
-                if current_line:
-                    log.write(f"[dim]{current_line}[/]")
-            else:
+        self._raw_log_lines.extend(formatted)
+        if len(self._raw_log_lines) > self._raw_log_max:
+            self._raw_log_lines = self._raw_log_lines[-self._raw_log_max:]
+
+        log_panel = self.query_one("#log-panel")
+        if log_panel.display:
+            log = self.query_one("#task-log", RichLog)
+            for display_line in formatted:
                 log.write(f"[dim]{display_line}[/]")
 
     def _update_task_list(self) -> None:
@@ -157,15 +212,12 @@ class DataClawApp(App):
 
         return messages
 
-    def _chat_write(self, text: str) -> None:
-        self.call_from_thread(self.query_one("#chat", RichLog).write, text)
-
     # ── 事件路由 ──
 
     def on_input_changed(self, event: Input.Changed) -> None:
         # 历史导航导致的 value 变更不触发补全框
-        if self._ignore_completion_count > 0:
-            self._ignore_completion_count -= 1
+        if self._suppress_completion:
+            self._suppress_completion = False
             self._completer.hide()
             return
         self._completer.on_input_changed(event.value)
@@ -181,27 +233,33 @@ class DataClawApp(App):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         input_w = self.query_one("#input", Input)
-        input_w.clear()
 
         if not text:
+            input_w.clear()
             return
 
-        # 补全框可见时，优先处理高亮项。
-        # 若用户只输入了部分前缀，先补全但不写入对话栏；
-        # 若已输入完整命令，则隐藏补全框并继续执行。
+        # 补全框可见且用户按回车时：根据命令是否需要参数决定行为
+        # - 无参数命令：补全后直接发送
+        # - 需参数命令（如 /workdir）：只填充到输入框，不发送，等用户输入参数
         if self._completer.visible:
             highlighted = self._completer.highlighted
             if highlighted is not None:
                 cmd = highlighted.name or ""
                 if text != cmd and not text.startswith(cmd + " "):
-                    self._completer.apply(highlighted)
-                    return
+                    entry = COMMANDS.get(cmd)
+                    needs_arg = entry[2] if entry else False
+                    if needs_arg:
+                        self._completer.apply(highlighted)
+                        return
+                    text = cmd
             self._completer.hide()
 
-        # 确定不是补全操作后，才写入对话栏
+        input_w.clear()
+
+        # 写入对话栏并发送
         self._add_to_history(text)
-        chat = self.query_one("#chat", RichLog)
-        chat.write(f"\n[bold cyan]👤 You:[/] {text}")
+        chat = self.query_one("#chat", ChatView)
+        chat.add_user(text)
 
         # 命令分发
         if text.startswith("/"):
@@ -212,44 +270,57 @@ class DataClawApp(App):
 
     @work(exclusive=True, exit_on_error=False)
     async def _stream_response(self, text: str) -> None:
-        chat = self.query_one("#chat", RichLog)
-        chat.write("[bold green]🤖 CoreClaw:[/]")
+        chat = self.query_one("#chat", ChatView)
+        chat.add_ai()
 
         try:
             current_response = ""
             async for event in self.agent.stream_chat_with_events(text):
                 if event["type"] == "tool_call":
-                    chat.write(f"  [yellow]🔧 {event['name']}({event['args']})[/]")
+                    chat.add_tool_call(event["name"], event["args"], event.get("id", ""))
                 elif event["type"] == "tool_result":
-                    content = str(event.get("content", ""))[:300]
-                    if content:
-                        chat.write(f"  [dim]→ {content}[/]")
+                    content = str(event.get("content", ""))
+                    if not content:
+                        content = "(无输出)"
+                    chat.add_tool_result(content, event.get("tool_call_id", ""))
+                elif event["type"] == "reasoning":
+                    chat.set_ai_reasoning(event["content"])
+                    chat._scroll_to_end()
                 elif event["type"] == "thinking":
                     new_content = event["content"]
                     if new_content.startswith(current_response):
                         delta = new_content[len(current_response):]
                         if delta:
-                            chat.write(delta)
+                            chat.append_ai(delta)
+                            chat._scroll_to_end()
                         current_response = new_content
                     else:
-                        chat.clear()
-                        chat.write("[bold green]🤖 CoreClaw:[/]\n")
-                        chat.write(new_content)
+                        chat.set_ai_content(new_content)
+                        chat._scroll_to_end()
                         current_response = new_content
                 elif event["type"] == "final":
-                    if event["content"] != current_response:
-                        chat.write(event["content"][len(current_response):])
-                    chat.write("\n")
+                    final_content = event["content"]
+                    if final_content != current_response:
+                        chat.set_ai_content(final_content)
+                        chat._scroll_to_end()
+                    current_response = final_content
+                    # 回复完成后收起思维链，避免历史消息占用空间
+                    chat.collapse_ai_reasoning()
+                    # 显示本次 token 消耗
+                    token_usage = event.get("token_usage", {})
+                    if token_usage and token_usage.get("total", 0) > 0:
+                        chat.set_ai_token_usage(token_usage)
+                        self._update_status()
         except Exception as e:
-            chat.write(f"[red]❌ 错误: {e}[/]")
+            chat.add_system(f"[red]❌ 错误: {e}[/]")
 
     def on_unmount(self) -> None:
         self.agent.close()
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.state == WorkerState.ERROR:
-            chat = self.query_one("#chat", RichLog)
-            chat.write(f"[red]❌ 工作线程错误: {event.error}[/]")
+            chat = self.query_one("#chat", ChatView)
+            chat.add_system(f"[red]❌ 工作线程错误: {event.error}[/]")
 
     def on_key(self, event) -> None:
         if event.key == "ctrl+d":
@@ -281,11 +352,11 @@ class DataClawApp(App):
                     event.stop()
                     return
                 messages = self._cancel_current()
-                chat = self.query_one("#chat", RichLog)
+                chat = self.query_one("#chat", ChatView)
                 if messages:
-                    chat.write("[yellow]" + "\n".join(messages) + "[/]")
+                    chat.add_system("[yellow]" + "\n".join(messages) + "[/]")
                 else:
-                    chat.write("[dim]⚠️ 没有正在执行的操作[/]")
+                    chat.add_system("[dim]⚠️ 没有正在执行的操作[/]")
                 event.stop()
                 return
 
@@ -293,22 +364,22 @@ class DataClawApp(App):
         if event.key == "ctrl+c":
             messages = self._cancel_current()
             if messages:
-                chat = self.query_one("#chat", RichLog)
-                chat.write("[yellow]" + "\n".join(messages) + "[/]")
+                chat = self.query_one("#chat", ChatView)
+                chat.add_system("[yellow]" + "\n".join(messages) + "[/]")
                 event.stop()
             return
 
-        # 历史记录导航（加载历史项时忽略随之而来的输入变更事件，避免补全框弹出）
+        # 历史记录导航（加载历史项时抑制补全框弹出）
         if event.key == "up":
             if self._history and self._history_index > 0:
-                self._ignore_completion_count += 1
+                self._suppress_completion = True
                 self._completer.hide()
                 self._history_index -= 1
                 input_w.value = self._history[self._history_index]
                 input_w.cursor_position = len(input_w.value)
             event.stop()
         elif event.key == "down":
-            self._ignore_completion_count += 1
+            self._suppress_completion = True
             self._completer.hide()
             if self._history and self._history_index < len(self._history) - 1:
                 self._history_index += 1

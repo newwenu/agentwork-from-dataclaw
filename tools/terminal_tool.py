@@ -34,8 +34,10 @@ from core.path_utils import resolve_under
 # 本工具使用 shell=False 直接创建进程，CMD/PowerShell 的 alias / doskey 不会生效。
 # 这里把 Linux 风格的常用命令名也加入 Windows 白名单，这样当用户安装了
 # Git Bash、Cygwin、MSYS2 等环境时，ls/cat/grep 等命令可直接调用。
+#
+# 注意: 删除命令（rm/del/rd/rmdir）已从白名单中移除，以下黑名单模式保留作为纵深防御。
 BLACKLISTED_PATTERNS = [
-    # 文件系统破坏
+    # 文件系统破坏（纵深防御：rm 已从白名单移除，以下模式防止绕过）
     r"rm\s+-rf\b",            # rm -rf 任意目标
     r"rm\s+-rf\s+/",
     r"rm\s+-rf\s+/\*",
@@ -75,9 +77,9 @@ if sys.platform == "win32":
         "tasklist", "systeminfo", "ipconfig", "ping", "tracert", "netstat",
         "df", "du", "ps", "top", "htop", "free", "uptime",
         "whoami", "date", "uname", "which", "whereis",
-        # 文件操作
-        "copy", "move", "del", "rd", "md", "mkdir", "rmdir", "ren",
-        "cp", "mv", "rm", "touch", "chmod", "chown",
+        # 文件操作（删除命令已移除：rm/del/rd/rmdir，防止 Agent 误删文件）
+        "copy", "move", "md", "mkdir", "ren",
+        "cp", "mv", "touch", "chmod", "chown",
         # 开发环境
         "python", "python3", "pip", "pip3",
         # 版本控制
@@ -100,8 +102,8 @@ else:
         "whoami", "date", "uname", "which", "whereis",
         # 压缩
         "tar", "zip", "unzip", "gzip", "gunzip",
-        # 文件操作
-        "mkdir", "touch", "cp", "mv", "rm", "rmdir",
+        # 文件操作（删除命令已移除：rm/rmdir，防止 Agent 误删文件）
+        "mkdir", "touch", "cp", "mv",
         "chmod", "chown",
     })
 
@@ -122,18 +124,14 @@ COMMAND_PATH_ARGS: dict[str, list[int]] = {
     "findstr": [2, 3],
     "sort": [1],
     "uniq": [1],
-    # 文件操作
+    # 文件操作（删除命令已移除：rm/del/rd/rmdir）
     "cp": [1, 2],
     "copy": [1, 2],
     "mv": [1, 2],
     "move": [1, 2],
-    "rm": [1],
-    "del": [1],
     "ren": [1, 2],
     "mkdir": [1],
     "md": [1],
-    "rmdir": [1],
-    "rd": [1],
     "touch": [1],
     # 目录查看
     "ls": [1],
@@ -201,8 +199,8 @@ class TerminalInput(BaseModel):
 class SafeTerminalTool(BaseTool):
     name: str = "terminal"
     description: str = (
-        "执行白名单内的 shell 命令。禁止管道和 shell 元字符，30秒超时后可后台运行，"
-        "参数路径受沙盒限制。用于 dir/type/findstr/ls/cat/grep/ps/pip/git 等。"
+        "执行白名单内的 shell 命令。禁止管道和 shell 元字符，禁止删除命令(rm/del/rd/rmdir)，"
+        "30秒超时后可后台运行，参数路径受沙盒限制。用于 dir/type/findstr/ls/cat/grep/ps/pip/git 等。"
     )
     args_schema: Type[BaseModel] = TerminalInput
     root_dir: str = ""

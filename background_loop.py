@@ -1,4 +1,4 @@
-"""Background Loop — OpenClaw 风格的定时任务调度器。
+"""Background Loop — DataClaw 风格的定时任务调度器。
 
 核心设计：
 - 一个后台 loop 负责调度
@@ -75,11 +75,12 @@ class BackgroundTask:
 
 
 class BackgroundLoop:
-    """OpenClaw 风格的后台定时任务调度器。"""
+    """DataClaw 风格的后台定时任务调度器。"""
 
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self.running = False
+        self._started = False
         self.tasks: dict[str, BackgroundTask] = {}
 
     # ========================================================================
@@ -132,7 +133,13 @@ class BackgroundLoop:
         return task
 
     def start(self) -> None:
-        """启动所有已注册的任务。"""
+        """启动所有已注册的任务。
+
+        内置任务仅在首次 start 时注册，防止重复调用导致任务重复执行。
+        """
+        if self._started:
+            return
+        self._started = True
         self.running = True
         print("[后台调度] 已启动")
 

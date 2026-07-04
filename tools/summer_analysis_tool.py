@@ -21,30 +21,20 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from langchain.tools import tool
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field
 
 from core.path_utils import resolve_under
 
 matplotlib.use("Agg")
 
-# 项目根目录（用于沙盒校验）
-_PROJECT_ROOT: Path | None = None
 
-
-def _get_project_root() -> Path:
-    """获取项目根目录（工具所在目录的父目录）。"""
-    global _PROJECT_ROOT
-    if _PROJECT_ROOT is None:
-        _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    return _PROJECT_ROOT
-
-
-def _resolve_sandboxed_path(file_path: str, must_exist: bool = False) -> Path:
+def _resolve_sandboxed_path(root: Path, file_path: str, must_exist: bool = False) -> Path:
     """解析并校验路径，返回安全的绝对路径。
 
     复用 core.path_utils.resolve_under 保证与文件工具一致的沙盒策略。
     """
-    return resolve_under(_get_project_root(), file_path, must_exist=must_exist)
+    return resolve_under(root, file_path, must_exist=must_exist)
 
 # ═══════════════════════════════════════════════════════════════
 # 配置层 (Configuration)
@@ -146,12 +136,14 @@ DEFAULT_PLOT_CONFIG = PlotConfig()
 
 def load_and_preprocess(
     csv_path: str,
+    root: Path,
     config: SensorConfig | None = None,
 ) -> pd.DataFrame:
     """加载并预处理 CSV 数据（带沙盒路径校验）。
 
     Args:
         csv_path: CSV 文件路径（必须在项目目录内）。
+        root: 沙盒根目录。
         config: 传感器配置，默认使用 DEFAULT_SENSOR_CONFIG。
 
     Returns:
@@ -160,7 +152,7 @@ def load_and_preprocess(
     Raises:
         ValueError: 路径非法或跳出沙盒。
     """
-    safe_path = _resolve_sandboxed_path(csv_path, must_exist=True)
+    safe_path = _resolve_sandboxed_path(root, csv_path, must_exist=True)
     cfg = config or DEFAULT_SENSOR_CONFIG
     df = pd.read_csv(safe_path)
     df = df.rename(columns=cfg.column_mapping)
@@ -675,15 +667,82 @@ def generate_report(
 
 
 # ═══════════════════════════════════════════════════════════════
-# Agent 工具层 (LangChain Tools)
+# Agent 工具层 (LangChain Tool)
 # ═══════════════════════════════════════════════════════════════
 
+_ACTION_LOAD = "load"
+_ACTION_STATS = "statistics"
+_ACTION_ANOMALY = "anomaly"
+_ACTION_CORR = "correlation"
+_ACTION_CHART = "chart"
+_ACTION_FULL = "full"
+_VALID_ACTIONS = {_ACTION_LOAD, _ACTION_STATS, _ACTION_ANOMALY, _ACTION_CORR, _ACTION_CHART, _ACTION_FULL}
 
-@tool
-def summer_load_data(csv_path: str) -> str:
-    """加载 summer.csv 并返回数据概况（行数、列数、时间范围、列名）。"""
-    try:
-        df = load_and_preprocess(csv_path)
+_CHART_TYPES = ["temp_hum", "light", "blackglobe", "co2", "heatmap", "co2_anomaly", "daily", "boxplot"]
+_SENSOR_TYPES = ["all", "temp", "hum", "light", "blackglobe", "co2"]
+
+
+class SummerAnalysisInput(BaseModel):
+    action: str = Field(
+        description=(
+            "操作类型: load(加载数据概况), statistics(统计摘要), "
+            "anomaly(异常检测), correlation(相关性分析), "
+            "chart(生成图表), full(完整分析)"
+        )
+    )
+    csv_path: str = Field(description="CSV 文件路径（相对于项目根目录）")
+    sensor_type: str = Field(default="all", description="传感器分组: all/temp/hum/light/blackglobe/co2（anomaly 用）")
+    k: float = Field(default=1.5, description="IQR 倍数（anomaly 用，默认 1.5）")
+    threshold: float = Field(default=0.5, description="相关性阈值（correlation 用，默认 0.5）")
+    chart_type: str = Field(default="", description="图表类型（chart 用）: temp_hum/light/blackglobe/co2/heatmap/co2_anomaly/daily/boxplot")
+    output_dir: str = Field(default="output", description="输出目录（chart/full 用，默认 output）")
+
+
+class SummerAnalysisTool(BaseTool):
+    """Summer environment data analysis tool."""
+
+    name: str = "summer_analysis"
+    description: str = (
+        "夏季温室环境数据分析。action: load(概况)/statistics(统计)/anomaly(异常检测)/"
+        "correlation(相关性)/chart(图表)/full(完整分析)。"
+    )
+    args_schema: type[BaseModel] = SummerAnalysisInput
+    root_dir: str = ""
+
+    def _run(
+        self,
+        action: str,
+        csv_path: str,
+        sensor_type: str = "all",
+        k: float = 1.5,
+        threshold: float = 0.5,
+        chart_type: str = "",
+        output_dir: str = "output",
+    ) -> str:
+        try:
+            if action not in _VALID_ACTIONS:
+                return f"Unknown action: {action}. Available: {sorted(_VALID_ACTIONS)}"
+
+            if action == _ACTION_LOAD:
+                return self._load(csv_path)
+            elif action == _ACTION_STATS:
+                return self._statistics(csv_path)
+            elif action == _ACTION_ANOMALY:
+                return self._anomaly(csv_path, sensor_type, k)
+            elif action == _ACTION_CORR:
+                return self._correlation(csv_path, threshold)
+            elif action == _ACTION_CHART:
+                return self._chart(csv_path, chart_type, output_dir)
+            elif action == _ACTION_FULL:
+                return self._full(csv_path, output_dir)
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _root(self) -> Path:
+        return Path(self.root_dir).resolve()
+
+    def _load(self, csv_path: str) -> str:
+        df = load_and_preprocess(csv_path, self._root())
         overview = {
             "csv_path": str(csv_path),
             "rows": len(df),
@@ -694,37 +753,18 @@ def summer_load_data(csv_path: str) -> str:
             "missing_values": {col: int(df[col].isnull().sum()) for col in df.columns if df[col].isnull().sum() > 0},
         }
         return json.dumps(overview, ensure_ascii=False, indent=2, default=str)
-    except Exception as e:
-        return f"Error loading data: {e}"
 
-
-@tool
-def summer_get_statistics(csv_path: str) -> str:
-    """返回 summer.csv 的描述性统计摘要（温度、湿度、光照、CO2 等）。"""
-    try:
-        df = load_and_preprocess(csv_path)
+    def _statistics(self, csv_path: str) -> str:
+        df = load_and_preprocess(csv_path, self._root())
         stats = compute_statistics(df)
         return json.dumps(stats, ensure_ascii=False, indent=2, default=str)
-    except Exception as e:
-        return f"Error computing statistics: {e}"
 
-
-@tool
-def summer_detect_anomalies(
-    csv_path: str,
-    sensor_type: str = "all",
-    k: float = 1.5,
-) -> str:
-    """用 IQR 检测 summer.csv 异常值。sensor_type: all/temp/hum/light/blackglobe/co2，k 默认 1.5。"""
-    try:
-        df = load_and_preprocess(csv_path)
+    def _anomaly(self, csv_path: str, sensor_type: str, k: float) -> str:
+        df = load_and_preprocess(csv_path, self._root())
         cfg = DEFAULT_SENSOR_CONFIG
         cols = cfg.get_sensor_group(sensor_type)
         anomalies = detect_anomalies_iqr(df, columns=cols, k=k)
-
-        # 夜间光照异常
         night_light = detect_night_light_anomaly(df)
-
         result = {
             "sensor_type": sensor_type,
             "k": k,
@@ -732,35 +772,19 @@ def summer_detect_anomalies(
             "night_light_anomaly": night_light,
         }
         return json.dumps(result, ensure_ascii=False, indent=2, default=str)
-    except Exception as e:
-        return f"Error detecting anomalies: {e}"
 
-
-@tool
-def summer_get_correlation(csv_path: str, threshold: float = 0.5) -> str:
-    """分析 summer.csv 传感器相关性，返回绝对值大于 threshold（默认 0.5）的强相关项。"""
-    try:
-        df = load_and_preprocess(csv_path)
+    def _correlation(self, csv_path: str, threshold: float) -> str:
+        df = load_and_preprocess(csv_path, self._root())
         strong = compute_correlation(df, threshold=threshold)
         result = [
             {"sensor_a": a, "sensor_b": b, "correlation": round(v, 4), "direction": "positive" if v > 0 else "negative"}
             for a, b, v in strong
         ]
         return json.dumps(result, ensure_ascii=False, indent=2, default=str)
-    except Exception as e:
-        return f"Error computing correlation: {e}"
 
-
-@tool
-def summer_generate_chart(
-    csv_path: str,
-    chart_type: str,
-    output_dir: str = "output",
-) -> str:
-    """为 summer.csv 生成图表。chart_type: temp_hum/light/blackglobe/co2/heatmap/co2_anomaly/daily/boxplot。输出到 output_dir（默认 output）。"""
-    try:
-        df = load_and_preprocess(csv_path)
-        output_path = _resolve_sandboxed_path(output_dir)
+    def _chart(self, csv_path: str, chart_type: str, output_dir: str) -> str:
+        df = load_and_preprocess(csv_path, self._root())
+        output_path = _resolve_sandboxed_path(self._root(), output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
         chart_dispatch = {
@@ -780,30 +804,18 @@ def summer_generate_chart(
 
         out = func(df, output_path)
         return f"Chart saved: {out}"
-    except Exception as e:
-        return f"Error generating chart: {e}"
 
-
-@tool
-def summer_run_full_analysis(
-    csv_path: str,
-    output_dir: str = "output",
-) -> str:
-    """对 summer.csv 执行完整分析：统计 + 异常检测 + 全部图表 + 报告。输出到 output_dir（默认 output）。"""
-    try:
-        df = load_and_preprocess(csv_path)
-        output_path = _resolve_sandboxed_path(output_dir)
+    def _full(self, csv_path: str, output_dir: str) -> str:
+        df = load_and_preprocess(csv_path, self._root())
+        output_path = _resolve_sandboxed_path(self._root(), output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # 1. 统计
         stats = compute_statistics(df)
 
-        # 2. 异常检测
         all_numeric = DEFAULT_SENSOR_CONFIG.all_numeric_cols()
         anomalies = detect_anomalies_iqr(df, columns=all_numeric)
         night_light = detect_night_light_anomaly(df)
 
-        # 3. 生成所有图表
         charts = []
         charts.append(plot_temp_hum_timeseries(df, output_path))
         charts.append(plot_light_timeseries(df, output_path))
@@ -814,7 +826,6 @@ def summer_run_full_analysis(
         charts.append(plot_daily_summary(df, output_path))
         charts.append(plot_sensor_boxplots(df, output_path))
 
-        # 4. 生成报告
         report_path = generate_report(df, stats, anomalies, night_light, output_path)
 
         temp_stats = stats.get("temperature", {})
@@ -834,5 +845,8 @@ def summer_run_full_analysis(
             "\n".join(f"  - {c}" for c in charts + [report_path])
         )
         return summary
-    except Exception as e:
-        return f"Error running full analysis: {e}"
+
+
+def create_summer_analysis_tool(base_dir: Path) -> SummerAnalysisTool:
+    """Create a summer_analysis tool instance."""
+    return SummerAnalysisTool(root_dir=str(base_dir))

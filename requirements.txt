@@ -10,6 +10,11 @@ langchain-community>=0.3.0             # 社区集成（含 ChatTongyi/Qwen）
 langgraph>=0.2.0                       # ReAct Agent 框架
 langchain-experimental>=0.3.0          # Python REPL 工具
 
+# ---- 配置与数据（代码直接 import，虽为间接依赖但需显式声明） ----
+pydantic>=2.0.0                        # config.py: model_validator
+pydantic-settings>=2.0.0               # config.py: BaseSettings
+pyyaml>=6.0                            # llm_factory.py: mock 场景加载
+
 # ---- 系统 ----
 python-dotenv>=1.0.0                   # 环境变量加载
 watchdog>=6.0.0                        # 文件系统监听（记忆自动保存）

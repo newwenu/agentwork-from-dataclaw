@@ -53,7 +53,7 @@ class WriteMemoryTool(BaseTool):
             # Create default structure
             default_content = f"""# 用户信息
 
-> 由 CoreClaw 自动维护，记录用户的基本信息和偏好。
+> 由 DataClaw 自动维护，记录用户的基本信息和偏好。
 
 ## 基本信息
 - **用户名字**:
@@ -105,7 +105,7 @@ class WriteMemoryTool(BaseTool):
 
         if not memory_file.exists():
             memory_file.write_text(
-                "# 长期记忆\n\n> 此文件由 CoreClaw 自动维护\n", encoding="utf-8"
+                "# 长期记忆\n\n> 此文件由 DataClaw 自动维护\n", encoding="utf-8"
             )
 
         text = memory_file.read_text(encoding="utf-8")
@@ -113,14 +113,14 @@ class WriteMemoryTool(BaseTool):
         if append:
             text += f"\n- {content}"
         else:
-            # Replace everything after header
+            # Replace everything after the header section (title + description)
             lines = text.split("\n")
+            header_end = len(lines)
             for i, line in enumerate(lines):
-                if line.startswith("# ") and i > 0:
-                    text = "\n".join(lines[: i + 1]) + f"\n\n- {content}"
+                if line.startswith("- "):
+                    header_end = i
                     break
-            else:
-                text += f"\n- {content}"
+            text = "\n".join(lines[:header_end]) + f"\n- {content}"
 
         memory_file.write_text(text, encoding="utf-8")
         return f"✅ Updated MEMORY.md: {content[:50]}..."

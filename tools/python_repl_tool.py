@@ -48,6 +48,8 @@ CODE_BLACKLIST_PATTERNS = [
     r"\bos\.mkdir\b",
     r"\bsubprocess\.\w+",
     r"\bsocket\.\w+",
+    # .trash/ 目录保护
+    r"\.trash[/\\'\"]",
 ]
 
 CODE_BLACKLIST_REGEX = [re.compile(p, re.IGNORECASE) for p in CODE_BLACKLIST_PATTERNS]

@@ -6,7 +6,7 @@
 
 安全与性能修复 (2026-06-25):
 1. 使用 dict 追踪文件读取位置 (替代 setattr hack)
-2. 批量 flush 日志 (替代每条消息写磁盘)
+2. 每条消息立即写入磁盘 (文件句柄复用，避免重复 open/close)
 3. 移除未使用的死代码
 4. 增加 LLM 调用节流 (最小间隔 30 秒)
 5. 修复 JSON 提取正则
@@ -55,58 +55,56 @@ class MemoryEncoder(json.JSONEncoder):
 
 
 class ChatLogger:
-    """按日期记录聊天记录。"""
-
-    BUFFER_FLUSH_SIZE = 10  # 缓冲 10 条后批量写入
+    """按日期记录聊天记录，每条消息立即写入磁盘确保不丢失。"""
 
     def __init__(self, logs_dir: Path):
         self.logs_dir = logs_dir
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._current_date: str | None = None
-        self._current_file: Path | None = None
-        self._buffer: list[dict] = []
+        self._file_handle = None
         self._lock = threading.Lock()
 
-    def _get_today_file(self) -> Path:
-        """获取今天的日志文件路径。"""
+    def _ensure_file(self) -> None:
+        """确保文件句柄指向今天的日志文件，跨日自动切换。"""
         today = datetime.now().strftime("%Y-%m-%d")
         if today != self._current_date:
-            # 日期切换时先 flush 旧缓冲区
-            self._flush()
+            if self._file_handle is not None:
+                self._file_handle.close()
+                self._file_handle = None
+            try:
+                new_handle = open(
+                    self.logs_dir / f"{today}.jsonl", "a", encoding="utf-8"
+                )
+            except OSError:
+                self._current_date = None
+                raise
             self._current_date = today
-            self._current_file = self.logs_dir / f"{today}.jsonl"
-        return self._current_file
-
-    def _flush(self) -> None:
-        """将缓冲数据写入文件。"""
-        if not self._buffer or not self._current_file:
-            return
-        with open(self._current_file, "a", encoding="utf-8") as f:
-            for record in self._buffer:
-                f.write(json.dumps(record, cls=MemoryEncoder, ensure_ascii=False) + "\n")
-        self._buffer = []
+            self._file_handle = new_handle
 
     def log_message(self, message: BaseMessage | dict) -> None:
-        """记录一条消息。"""
+        """记录一条消息，立即写入磁盘。"""
         with self._lock:
-            self._get_today_file()
-
+            self._ensure_file()
             record = {
                 "timestamp": datetime.now().isoformat(),
                 "message": message,
             }
-            self._buffer.append(record)
-            # 每条消息都 flush，确保数据不丢失
-            self._flush()
+            self._file_handle.write(
+                json.dumps(record, cls=MemoryEncoder, ensure_ascii=False) + "\n"
+            )
+            self._file_handle.flush()
 
     def close(self) -> None:
-        """关闭日志，写入剩余数据。"""
+        """关闭日志文件句柄。"""
         with self._lock:
-            self._flush()
+            if self._file_handle is not None:
+                self._file_handle.close()
+                self._file_handle = None
 
     def get_today_messages(self) -> list[dict]:
         """获取今天的所有消息。"""
-        file_path = self._get_today_file()
+        today = datetime.now().strftime("%Y-%m-%d")
+        file_path = self.logs_dir / f"{today}.jsonl"
         if not file_path.exists():
             return []
         messages = []
@@ -122,23 +120,25 @@ class ChatLogger:
 
 
 class MemoryWatcher(FileSystemEventHandler):
-    """监听 memory/logs/ 目录，提取新记忆。"""
+    """监听 memory/logs/ 目录，提取新记忆。
 
-    # LLM 调用最小间隔 (秒)，防止费用暴涨
+    仅在 memory_extraction=True 时启用 LLM 记忆提取，
+    否则仅保留文件监听框架但不做任何 LLM 调用。
+    """
+
     LLM_CALL_COOLDOWN = 30
 
-    def __init__(self, memory_dir: Path, llm_client: Any | None = None):
+    def __init__(self, memory_dir: Path, llm_client: Any | None = None, *, enable_extraction: bool = False, llm_cooldown: int = 30):
         self.memory_dir = memory_dir
         self.logs_dir = memory_dir / "logs"
         self.memory_file = memory_dir / "MEMORY.md"
         self.user_file = memory_dir / "USER.md"
         self.llm_client = llm_client
+        self.enable_extraction = enable_extraction
+        self.LLM_CALL_COOLDOWN = llm_cooldown
 
-        # 使用 dict 追踪文件读取位置 (修复 setattr hack)
         self._file_positions: dict[str, int] = {}
         self._lock = threading.Lock()
-
-        # LLM 调用节流
         self._last_llm_call: datetime | None = None
 
     def on_modified(self, event) -> None:
@@ -188,8 +188,14 @@ class MemoryWatcher(FileSystemEventHandler):
             print(f"[MemoryWatcher] 处理日志文件出错: {e}")
 
     def _extract_memories(self, messages: list[dict]) -> None:
-        """从消息中提取记忆并更新 MEMORY.md。"""
-        # 只提取用户消息
+        """从消息中提取记忆并更新 MEMORY.md。
+
+        仅在 enable_extraction=True 时执行 LLM 提取，
+        否则静默跳过，不产生任何 LLM 调用费用。
+        """
+        if not self.enable_extraction:
+            return
+
         user_messages = [
             msg for msg in messages
             if self._is_user_message(msg)
@@ -339,21 +345,33 @@ class MemoryWatcher(FileSystemEventHandler):
 class MemoryManager:
     """记忆管理器主类。"""
 
-    def __init__(self, base_dir: Path, llm_client: Any | None = None):
+    def __init__(
+        self,
+        base_dir: Path,
+        llm_client: Any | None = None,
+        *,
+        enable_extraction: bool = False,
+        enable_long_term_inject: bool = False,
+        llm_cooldown: int = 30,
+    ):
         self.base_dir = base_dir
         self.memory_dir = base_dir / "memory"
         self.logs_dir = self.memory_dir / "logs"
         self.llm_client = llm_client
+        self.enable_extraction = enable_extraction
+        self.enable_long_term_inject = enable_long_term_inject
 
-        # 创建目录
         self.memory_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
 
-        # 初始化组件
         self.chat_logger = ChatLogger(self.logs_dir)
-        self.memory_watcher = MemoryWatcher(self.memory_dir, llm_client)
+        self.memory_watcher = MemoryWatcher(
+            self.memory_dir,
+            llm_client,
+            enable_extraction=enable_extraction,
+            llm_cooldown=llm_cooldown,
+        )
 
-        # 文件系统观察器
         self.observer: Observer | None = None
 
     def start_watching(self) -> None:

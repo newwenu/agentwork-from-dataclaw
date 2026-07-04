@@ -68,7 +68,7 @@ class CommandCompleter:
 
     def _show(self, prefix: str) -> None:
         matches = [
-            (cmd, desc) for cmd, (_, desc) in self.commands.items() if cmd.startswith(prefix)
+            (cmd, desc) for cmd, (_, desc, _) in self.commands.items() if cmd.startswith(prefix)
         ]
         if not matches:
             self.hide()
