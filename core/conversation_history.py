@@ -103,7 +103,80 @@ class ConversationHistory:
         self._messages.append(msg)
 
     def get_messages(self) -> list[BaseMessage]:
+        self._repair_orphaned_tool_calls()
         return self._messages
+
+    def _repair_orphaned_tool_calls(self) -> None:
+        """修复孤立的 tool_calls：直接抛弃不完整的工具调用链。
+
+        场景：用户取消（Esc/Ctrl+C）或异常中断流式对话时，
+        AIMessage(tool_calls) 已追加但 ToolMessage 尚未到达，
+        导致下次调用时 LangGraph 报 INVALID_CHAT_HISTORY 错误。
+
+        修复策略（抛弃式）：
+        1. 收集所有已应答的 tool_call_id
+        2. 找出 AIMessage 中未应答的 tool_call，从列表中剥离
+        3. 若剥离后 AIMessage 无 tool_calls 也无 content，则整条删除
+        4. 若删除 AIMessage 导致其已应答的 ToolMessage 失去父级，一并删除
+        """
+        if not self._messages:
+            return
+
+        answered_ids: set[str] = set()
+        for msg in self._messages:
+            tc_id = getattr(msg, "tool_call_id", None)
+            if tc_id:
+                answered_ids.add(tc_id)
+
+        ai_orphans: dict[int, list[str]] = {}
+        for idx, msg in enumerate(self._messages):
+            tool_calls = getattr(msg, "tool_calls", None)
+            if not tool_calls:
+                continue
+            orphan_ids = []
+            for tc in tool_calls:
+                tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                if tc_id and tc_id not in answered_ids:
+                    orphan_ids.append(tc_id)
+            if orphan_ids:
+                ai_orphans[idx] = orphan_ids
+
+        if not ai_orphans:
+            return
+
+        remove_indices: set[int] = set()
+
+        for idx, orphan_ids in ai_orphans.items():
+            msg = self._messages[idx]
+            tool_calls = list(getattr(msg, "tool_calls", []))
+            kept = [tc for tc in tool_calls if (tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")) not in orphan_ids]
+
+            if not kept and not (getattr(msg, "content", None) or "").strip():
+                remove_indices.add(idx)
+            elif len(kept) < len(tool_calls):
+                msg.tool_calls = kept
+                invalid_kwargs = getattr(msg, "invalid_tool_calls", None)
+                if invalid_kwargs:
+                    msg.invalid_tool_calls = [
+                        itc for itc in invalid_kwargs
+                        if (itc.get("id", "") if isinstance(itc, dict) else getattr(itc, "id", "")) not in orphan_ids
+                    ]
+
+        if remove_indices:
+            orphaned_tool_ids: set[str] = set()
+            for idx in remove_indices:
+                msg = self._messages[idx]
+                for tc in getattr(msg, "tool_calls", []):
+                    tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                    if tc_id:
+                        orphaned_tool_ids.add(tc_id)
+
+            for idx, msg in enumerate(self._messages):
+                tc_id = getattr(msg, "tool_call_id", None)
+                if tc_id and tc_id in orphaned_tool_ids:
+                    remove_indices.add(idx)
+
+            self._messages = [m for i, m in enumerate(self._messages) if i not in remove_indices]
 
     def last(self) -> BaseMessage | None:
         return self._messages[-1] if self._messages else None

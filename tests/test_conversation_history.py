@@ -357,3 +357,106 @@ class TestApplyStrategyNoop:
         msgs = [HumanMessage(content=str(i)) for i in range(100)]
         h.replace_all(msgs)
         assert len(h) == 100
+
+
+# ── _repair_orphaned_tool_calls ─────────────────────────────
+
+
+class TestRepairOrphanedToolCalls:
+    def test_no_repair_when_history_valid(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="hi"))
+        h.append(AIMessage(content="hello"))
+        msgs = h.get_messages()
+        assert len(msgs) == 2
+
+    def test_no_repair_when_tool_calls_answered(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="run ls"))
+        h.append(AIMessage(content="", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+        ]))
+        h.append(ToolMessage(content="file1.txt", tool_call_id="c1", name="terminal"))
+        h.append(AIMessage(content="here are the files"))
+        msgs = h.get_messages()
+        assert len(msgs) == 4
+
+    def test_discard_orphaned_ai_message_no_content(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="run ls"))
+        h._messages.append(AIMessage(content="", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+        ]))
+        msgs = h.get_messages()
+        assert len(msgs) == 1
+        assert msgs[0].type == "human"
+
+    def test_discard_orphaned_keeps_ai_with_content(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="run ls"))
+        h._messages.append(AIMessage(content="Let me check", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+        ]))
+        msgs = h.get_messages()
+        assert len(msgs) == 2
+        assert msgs[1].content == "Let me check"
+        assert not msgs[1].tool_calls
+
+    def test_discard_all_orphaned_multiple_tool_calls(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="run both"))
+        h._messages.append(AIMessage(content="", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+            {"name": "python_repl", "args": {"query": "1+1"}, "id": "c2", "type": "tool_call"},
+        ]))
+        msgs = h.get_messages()
+        assert len(msgs) == 1
+        assert msgs[0].type == "human"
+
+    def test_strip_only_orphaned_keep_answered(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="run"))
+        h._messages.append(AIMessage(content="", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+            {"name": "python_repl", "args": {"query": "1+1"}, "id": "c2", "type": "tool_call"},
+        ]))
+        h._messages.append(ToolMessage(content="result1", tool_call_id="c1", name="terminal"))
+        msgs = h.get_messages()
+        assert len(msgs) == 3
+        ai_msg = [m for m in msgs if m.type == "ai"][0]
+        assert len(ai_msg.tool_calls) == 1
+        assert ai_msg.tool_calls[0]["id"] == "c1"
+        tool_msg = [m for m in msgs if m.type == "tool"][0]
+        assert tool_msg.tool_call_id == "c1"
+
+    def test_cascade_delete_orphaned_tool_messages(self):
+        h = ConversationHistory()
+        h.append(HumanMessage(content="run"))
+        h._messages.append(AIMessage(content="", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+        ]))
+        h._messages.append(ToolMessage(content="result1", tool_call_id="c1", name="terminal"))
+        h._messages.append(AIMessage(content="", tool_calls=[
+            {"name": "python_repl", "args": {"query": "1+1"}, "id": "c2", "type": "tool_call"},
+        ]))
+        msgs = h.get_messages()
+        assert len(msgs) == 3
+        types = [m.type for m in msgs]
+        assert types == ["human", "ai", "tool"]
+        assert msgs[1].tool_calls[0]["id"] == "c1"
+        assert msgs[2].tool_call_id == "c1"
+
+    def test_no_repair_on_empty_history(self):
+        h = ConversationHistory()
+        msgs = h.get_messages()
+        assert msgs == []
+
+    def test_repair_idempotent(self):
+        h = ConversationHistory()
+        h._messages.append(AIMessage(content="", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+        ]))
+        msgs1 = h.get_messages()
+        assert len(msgs1) == 0
+        msgs2 = h.get_messages()
+        assert len(msgs2) == 0

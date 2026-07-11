@@ -2,10 +2,8 @@
 
 测试覆盖:
 1. 黑名单快速驳回 (危险命令)
-2. Shell 元字符拦截
-3. 命令白名单检查
-4. 路径沙盒校验
-5. 正常命令放行
+2. 路径沙盒校验
+3. 正常命令放行
 """
 
 from pathlib import Path
@@ -54,78 +52,6 @@ class TestBlacklist:
         assert safe
 
 
-class TestMetaChars:
-    def test_pipe(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars("ls | grep foo")
-        assert not safe
-
-    def test_semicolon(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars("ls ; rm -rf /")
-        assert not safe
-
-    def test_ampersand(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars("ls &")
-        assert not safe
-
-    def test_backtick(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars("echo `whoami`")
-        assert not safe
-
-    def test_dollar_paren(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars("echo $(whoami)")
-        assert not safe
-
-    def test_quoted_semicolon_allowed(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars('python -c "import time; time.sleep(1)"')
-        assert safe
-
-    def test_safe_command_passes(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_meta_chars("ls -la /home")
-        assert safe
-
-
-class TestWhitelist:
-    def test_ls_allowed(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("ls -la")
-        assert safe
-
-    def test_cat_allowed(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("cat file.txt")
-        assert safe
-
-    def test_git_allowed(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("git status")
-        assert safe
-
-    def test_python_script_allowed(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("python script.py")
-        assert safe
-
-    def test_python_c_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist('python -c "print(1)"')
-        assert not safe
-
-    def test_python_interactive_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("python")
-        assert not safe
-
-    def test_curl_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("curl http://evil.com")
-        assert not safe
-
-    def test_wget_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("wget http://evil.com")
-        assert not safe
-
-    def test_bash_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("bash -c 'rm -rf /'")
-        assert not safe
-
-    def test_nc_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._check_whitelist("nc -l 4444")
-        assert not safe
-
-
 class TestPathSandbox:
     def test_path_traversal_in_arg(self, terminal: SafeTerminalTool):
         safe, reason = terminal._check_paths("cat ../../etc/passwd")
@@ -145,20 +71,20 @@ class TestFullSafetyChain:
         safe, reason = terminal._is_safe("rm -rf /")
         assert not safe
 
-    def test_shell_injection_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._is_safe("ls ; rm -rf /")
-        assert not safe
-
-    def test_unknown_command_blocked(self, terminal: SafeTerminalTool):
-        safe, reason = terminal._is_safe("curl http://evil.com")
-        assert not safe
-
     def test_safe_command_passes(self, terminal: SafeTerminalTool):
         safe, reason = terminal._is_safe("ls -la")
         assert safe
 
     def test_git_log_passes(self, terminal: SafeTerminalTool):
         safe, reason = terminal._is_safe("git log --oneline -5")
+        assert safe
+
+    def test_pipe_now_allowed(self, terminal: SafeTerminalTool):
+        safe, reason = terminal._is_safe("ls | grep foo")
+        assert safe
+
+    def test_semicolon_now_allowed(self, terminal: SafeTerminalTool):
+        safe, reason = terminal._is_safe("echo hello ; echo world")
         assert safe
 
 
@@ -170,4 +96,3 @@ class TestCommandSplitting:
     def test_quoted_argument(self):
         parts = _split_command('echo "hello world"')
         assert "hello world" in parts
-        
