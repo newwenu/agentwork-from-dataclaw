@@ -124,12 +124,35 @@ class TestConversationHistorySyncAppend:
         assert len(h) == 2
         assert h.last() is ai_msg
 
-    def test_replace_same_type(self):
+    def test_replace_same_id_ai_message(self):
         h = ConversationHistory()
-        h.append(AIMessage(content="partial"))
-        h.sync_append(AIMessage(content="updated"))
+        h.append(AIMessage(content="partial", id="msg1"))
+        h.sync_append(AIMessage(content="updated", id="msg1"))
         assert len(h) == 1
         assert h.last().content == "updated"
+
+    def test_no_replace_different_id_ai_messages(self):
+        h = ConversationHistory()
+        h.append(AIMessage(content="first", id="msg1"))
+        h.sync_append(AIMessage(content="second", id="msg2"))
+        assert len(h) == 2
+        assert h.get_messages()[0].content == "first"
+        assert h.get_messages()[1].content == "second"
+
+    def test_replace_same_tool_call_id(self):
+        h = ConversationHistory()
+        h.append(ToolMessage(content="partial", tool_call_id="c1"))
+        h.sync_append(ToolMessage(content="updated", tool_call_id="c1"))
+        assert len(h) == 1
+        assert h.last().content == "updated"
+
+    def test_no_replace_different_tool_call_ids(self):
+        h = ConversationHistory()
+        h.append(ToolMessage(content="result1", tool_call_id="c1"))
+        h.sync_append(ToolMessage(content="result2", tool_call_id="c2"))
+        assert len(h) == 2
+        assert h.get_messages()[0].content == "result1"
+        assert h.get_messages()[1].content == "result2"
 
     def test_sync_on_empty_history(self):
         h = ConversationHistory()
@@ -143,6 +166,22 @@ class TestConversationHistorySyncAppend:
         h.sync_append(tool_msg)
         assert len(h) == 2
         assert h.last().type == "tool"
+
+    def test_no_id_messages_always_append(self):
+        h = ConversationHistory()
+        h.sync_append(HumanMessage(content="a"))
+        h.sync_append(HumanMessage(content="b"))
+        assert len(h) == 2
+        assert h.get_messages()[0].content == "a"
+        assert h.get_messages()[1].content == "b"
+
+    def test_consecutive_ai_with_tool_calls_preserved(self):
+        h = ConversationHistory()
+        h.sync_append(AIMessage(content="", id="tc_msg", tool_calls=[
+            {"name": "terminal", "args": {"command": "ls"}, "id": "c1", "type": "tool_call"},
+        ]))
+        h.sync_append(AIMessage(content="", id="meta_msg", response_metadata={"token_usage": {}}))
+        assert len(h) == 2
 
 
 class TestConversationHistoryClear:

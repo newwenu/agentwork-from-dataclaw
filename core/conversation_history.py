@@ -70,14 +70,37 @@ class ConversationHistory:
         self._messages = list(messages)
         self._apply_strategy()
 
+    def _msg_identity(self, msg: BaseMessage) -> str | None:
+        """提取消息唯一标识，用于判断是否为同一条消息的增量更新。
+
+        - ToolMessage 用 tool_call_id 标识
+        - AIMessage 用 id 标识
+        - 其他类型返回 None（无法判断，不做合并）
+        """
+        tc_id = getattr(msg, "tool_call_id", None)
+        if tc_id:
+            return f"tool:{tc_id}"
+        msg_id = getattr(msg, "id", None)
+        if msg_id:
+            return f"ai:{msg_id}"
+        return None
+
     def sync_append(self, msg: BaseMessage) -> None:
-        """流式场景下同步追加单条消息（不触发完整策略，避免频繁截断）。"""
+        """流式场景下同步追加单条消息（不触发完整策略，避免频繁截断）。
+
+        去重规则：如果新消息与历史最后一条具有相同唯一标识
+        （tool_call_id 或 id），则视为同一条消息的增量更新，替换之；
+        否则直接追加，避免连续同类型但不同消息被错误覆盖。
+        """
         if not msg.additional_kwargs.get("_timestamp"):
             msg.additional_kwargs["_timestamp"] = datetime.now().isoformat()
-        if self._messages and self._messages[-1].type == msg.type:
-            self._messages[-1] = msg
-        else:
-            self._messages.append(msg)
+        new_id = self._msg_identity(msg)
+        if new_id is not None and self._messages:
+            last_id = self._msg_identity(self._messages[-1])
+            if last_id == new_id:
+                self._messages[-1] = msg
+                return
+        self._messages.append(msg)
 
     def get_messages(self) -> list[BaseMessage]:
         return self._messages
