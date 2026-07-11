@@ -22,6 +22,8 @@ class ChatMessage(Horizontal):
         classes: str | None = None,
         extra_widgets: list[Widget] | None = None,
         extra_widgets_after: list[Widget] | None = None,
+        *,
+        body_markup: bool = False,
     ) -> None:
         self.sender = sender
         self.icon = icon
@@ -35,9 +37,10 @@ class ChatMessage(Horizontal):
         header = Horizontal(sender_static, classes="message-header")
 
         # 消息体：expand/shrink 都开启，让宽度完全由气泡容器决定，
-        # 避免 emoji 等宽字符通过“最优宽度”撑开布局
+        # 避免 emoji 等宽字符通过"最优宽度"撑开布局。
+        # markup=False 避免用户输入中的 { } [ ] 被 Rich 误解析为 markup 标签。
         self._body = Static(
-            content, classes="message-body", expand=True, shrink=True
+            content, classes="message-body", expand=True, shrink=True, markup=body_markup
         )
         if not content:
             self._body.display = False
@@ -80,7 +83,7 @@ class AIMessage(ChatMessage):
 
     def __init__(self, content: str = "") -> None:
         self._reasoning_content = ""
-        self._reasoning_body = Static("", classes="reasoning-body")
+        self._reasoning_body = Static("", classes="reasoning-body", markup=False)
         self._reasoning = Collapsible(
             self._reasoning_body,
             title="🧠 思维链",
@@ -156,11 +159,11 @@ class ToolMessage(ChatMessage):
         self._result = ""
         self._args_collapsible = False
 
-        self._args_preview = Static("", classes="tool-args-preview")
+        self._args_preview = Static("", classes="tool-args-preview", markup=False)
         self._args_preview.display = False
-        self._args_body = Static("", classes="tool-args-body")
+        self._args_body = Static("", classes="tool-args-body", markup=False)
 
-        self._result_body = Static("", classes="tool-result-body")
+        self._result_body = Static("", classes="tool-result-body", markup=False)
         self._result_scroll = VerticalScroll(
             self._result_body,
             classes="tool-result-scroll",
@@ -295,10 +298,10 @@ class ToolMessage(ChatMessage):
 
 
 class SystemMessage(ChatMessage):
-    """系统提示消息。"""
+    """系统提示消息，保留 Rich markup 支持着色（如 [red]错误[/]）。"""
 
     def __init__(self, content: str = "") -> None:
-        super().__init__("System", "·", content, classes="system-message")
+        super().__init__("System", "·", content, classes="system-message", body_markup=True)
 
 
 class ChatView(VerticalScroll):
