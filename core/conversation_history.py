@@ -68,6 +68,7 @@ class ConversationHistory:
             if not msg.additional_kwargs.get("_timestamp"):
                 msg.additional_kwargs["_timestamp"] = datetime.now().isoformat()
         self._messages = list(messages)
+        self.cleanup_orphaned_tool_calls()
         self._apply_strategy()
 
     def _msg_identity(self, msg: BaseMessage) -> str | None:
@@ -88,18 +89,25 @@ class ConversationHistory:
     def sync_append(self, msg: BaseMessage) -> None:
         """流式场景下同步追加单条消息（不触发完整策略，避免频繁截断）。
 
-        去重规则：如果新消息与历史最后一条具有相同唯一标识
-        （tool_call_id 或 id），则视为同一条消息的增量更新，替换之；
-        否则直接追加，避免连续同类型但不同消息被错误覆盖。
+        去重规则：在历史末尾 20 条消息中查找相同唯一标识的消息，
+        找到则替换（增量更新），否则追加。
+
+        向后搜索（而非仅检查最后一条）的原因是：在 LangGraph
+        updates 模式下，agent 节点可能将已有消息随新消息一同
+        返回，若中间夹杂了 HumanMessage 等无标识消息，仅检查
+        最后一条会导致去重失效，产生带有 tool_calls 但没有对应
+        ToolMessage 的孤儿 AIMessage。
         """
         if not msg.additional_kwargs.get("_timestamp"):
             msg.additional_kwargs["_timestamp"] = datetime.now().isoformat()
         new_id = self._msg_identity(msg)
         if new_id is not None and self._messages:
-            last_id = self._msg_identity(self._messages[-1])
-            if last_id == new_id:
-                self._messages[-1] = msg
-                return
+            # 从后往前搜索最近 20 条消息，找到即替换
+            search_start = max(0, len(self._messages) - 20)
+            for i in range(len(self._messages) - 1, search_start - 1, -1):
+                if self._msg_identity(self._messages[i]) == new_id:
+                    self._messages[i] = msg
+                    return
         self._messages.append(msg)
 
     def get_messages(self) -> list[BaseMessage]:
@@ -113,6 +121,48 @@ class ConversationHistory:
 
     def clear(self) -> None:
         self._messages.clear()
+
+    def cleanup_orphaned_tool_calls(self) -> int:
+        """清理存在孤立 tool_calls 的 AIMessage。
+
+        某些 LLM 提供商（如 DeepSeek）严格要求每条带有 tool_calls
+        的 AIMessage 之后必须有对应的 ToolMessage。若因流式同步异常
+        导致历史中出现"孤儿"工具调用，后续请求将被拒绝。
+
+        策略：收集所有 ToolMessage 的 tool_call_id，然后移除那些
+        tool_calls 中包含未匹配 ID 的 AIMessage（若某 AIMessage
+        的所有 tool_calls 均无对应 ToolMessage，则整条移除）。
+
+        Returns:
+            移除的消息数量。
+        """
+        if not self._messages:
+            return 0
+
+        # 收集所有已存在的 tool_call_id（来自 ToolMessage）
+        responded_ids: set[str] = set()
+        for msg in self._messages:
+            tc_id = getattr(msg, "tool_call_id", None)
+            if tc_id:
+                responded_ids.add(tc_id)
+
+        cleaned: list[BaseMessage] = []
+        removed = 0
+        for msg in self._messages:
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                # 检查是否有任何一个 tool_call 没有收到 ToolMessage 响应
+                orphaned = any(
+                    tc.get("id", "") not in responded_ids
+                    for tc in msg.tool_calls
+                )
+                if orphaned:
+                    removed += 1
+                    continue  # 丢弃整条消息
+            cleaned.append(msg)
+
+        if removed:
+            self._messages = cleaned
+        return removed
 
     def _apply_strategy(self) -> None:
         """截断策略入口，当前暂不截断。

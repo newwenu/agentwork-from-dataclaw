@@ -219,6 +219,16 @@ class CoreClawAgent:
                             if hasattr(msg, "type"):
                                 self.history.sync_append(msg)
 
+        # 清理流式同步可能产生的孤立 tool_calls（有 AIMessage
+        # 的 tool_calls 但没有对应 ToolMessage），避免下次请求
+        # 时 LLM 提供商（如 DeepSeek）因消息历史不完整而拒绝
+        removed = self.history.cleanup_orphaned_tool_calls()
+        if removed:
+            import logging
+            logging.getLogger("claw").warning(
+                f"清理了 {removed} 条孤立 tool_calls AIMessage"
+            )
+
         # 从已更新的历史中获取最终 AI 消息
         ai_message = self.history.last()
         self._finalize_chat(ai_message)
